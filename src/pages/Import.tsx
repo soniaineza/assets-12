@@ -183,9 +183,22 @@ export function Import() {
           alert('The file appears to be empty.');
           return;
         }
-        const cleanHeaders = (rows[0] as any[]).map((h) => String(h).trim());
+        // Auto-detect the header row by finding the row that contains the most expected column names
+        const knownLabels = expectedHeaderOrder.map((f) => f.label.toLowerCase());
+        let headerRowIndex = 0;
+        let bestScore = 0;
+        for (let r = 0; r < Math.min(rows.length, 10); r++) {
+          const rowCells = (rows[r] as any[]).map((h) => String(h || '').trim().toLowerCase());
+          const score = rowCells.filter((cell) => knownLabels.includes(cell)).length;
+          if (score > bestScore) {
+            bestScore = score;
+            headerRowIndex = r;
+          }
+        }
+
+        const cleanHeaders = (rows[headerRowIndex] as any[]).map((h) => String(h).trim());
         const dataRows = rows
-          .slice(1)
+          .slice(headerRowIndex + 1)
           .filter((row: any[]) => row.some((c) => c !== '' && c !== null));
 
         preparePreview(cleanHeaders, dataRows);
