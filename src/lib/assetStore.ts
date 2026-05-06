@@ -145,9 +145,9 @@ class AssetStore {
     }
 
     // Log changes
-    Object.keys(updates).forEach(key => {
-      if (key !== 'updatedAt' && (currentAsset as any)[key] !== updates[key as keyof Asset]) {
-        this.logChange(id, key, (currentAsset as any)[key], updates[key as keyof Asset]);
+    Object.entries(updates).forEach(([key, value]) => {
+      if (key !== 'updatedAt' && (currentAsset as any)[key] !== value) {
+        this.logChange(id, key, (currentAsset as any)[key], value);
       }
     });
 
@@ -166,6 +166,19 @@ class AssetStore {
     }
 
     await this.logChange(id, 'DELETED', null, 'Asset Soft Deleted');
+  }
+
+  async clearAssets(): Promise<void> {
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('assets')
+      .update({ deleted_at: now })
+      .is('deleted_at', null);
+
+    if (error) {
+      console.error('Error clearing assets:', error);
+      throw new Error('Failed to clear existing assets');
+    }
   }
 
   async importAssets(

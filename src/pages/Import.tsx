@@ -25,31 +25,28 @@ export function Import() {
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const normalizeHeader = (value: any) =>
-    String(value || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '');
+    String(value || '').trim();
 
   const expectedHeaderOrder = [
-    { key: 'tagNumber', label: 'Tag Number (New)' },
-    { key: 'name', label: 'Assets Description' },
-    { key: 'category', label: 'Category (Furniture, IT, Equipm)' },
-    { key: 'location', label: 'LOCATION' },
-    { key: 'assignedTo', label: 'User' },
-    { key: 'supplier', label: 'Supplier' },
-    { key: 'value', label: 'Acquisition Value /Estimated Value' },
-    { key: 'acquisitionDate', label: 'Acquisition date/Purchase Date' },
-    { key: 'fundingSource', label: 'Funding Source / Project Code' },
-    { key: 'condition', label: 'Asset Condition' },
-    { key: 'serialNumber', label: 'Serial No.' },
-    { key: 'notes', label: 'Comment' }
+    { key: 'tagNumber', label: 'Tag Number (New)', required: true },
+    { key: 'name', label: 'Assets Description', required: true },
+    { key: 'category', label: 'Category (Furniture, IT, Equipm)', required: true },
+    { key: 'location', label: 'LOCATION', required: true },
+    { key: 'assignedTo', label: 'User', required: false },
+    { key: 'supplier', label: 'Supplier', required: false },
+    { key: 'value', label: 'Acquisition Value /Estimated Value', required: true },
+    { key: 'acquisitionDate', label: 'Acquisition date/Purchase Date', required: true },
+    { key: 'fundingSource', label: 'Funding Source / Project Code', required: false },
+    { key: 'condition', label: 'Asset Condition', required: true },
+    { key: 'serialNumber', label: 'Serial No.', required: false },
+    { key: 'notes', label: 'Comment', required: false }
   ];
 
   const systemFields = [
     {
       key: 'tagNumber',
-      label: 'Tag Number',
-      required: true,
-      aliases: ['tag', 'tag_number', 'tagno', 'tag no']
+      label: 'Tag Number (New)',
+      required: true
     },
     {
       key: 'name',
@@ -125,59 +122,38 @@ export function Import() {
   };
 
   const preparePreview = (incomingHeaders: string[], dataRows: any[][]) => {
-    let actualHeaders = incomingHeaders;
-    let actualData = dataRows;
+    const actualHeaders = incomingHeaders.map(normalizeHeader);
+    const actualData = dataRows;
 
-    const isHeaderLike = (row: any[]) =>
-      row.some((cell) => {
-        const value = normalizeHeader(cell);
-        return systemFields.some((field) => {
-          const aliases = [field.key, field.label, ...(field.aliases || [])];
-          return aliases.some((alias) => {
-            const aliasClean = normalizeHeader(alias);
-            return aliasClean && (value === aliasClean || value.includes(aliasClean) || aliasClean.includes(value));
-          });
-        });
-      });
-
-    if (!isHeaderLike(actualHeaders) && actualData.length > 0 && isHeaderLike(actualData[0])) {
-      actualHeaders = actualData[0].map((h) => String(h).trim());
-      actualData = actualData.slice(1);
-    }
+    const exactHeaderMatch =
+      actualHeaders.length === expectedHeaderOrder.length &&
+      actualHeaders.every((header, index) => header === expectedHeaderOrder[index].label);
 
     const fieldMap: Record<string, number> = {};
-    const mappedIndices = new Set<number>();
-
-    systemFields.forEach((field) => {
-      const fieldAliases = [field.key, field.label, ...(field.aliases || [])].map(normalizeHeader);
-      const headerIndex = actualHeaders.findIndex((header) => {
-        const headerClean = normalizeHeader(header);
-        return fieldAliases.some(
-          (alias) => alias && (headerClean === alias || headerClean.includes(alias) || alias.includes(headerClean))
-        );
-      });
-
-      if (headerIndex !== -1) {
-        fieldMap[field.key] = headerIndex;
-        mappedIndices.add(headerIndex);
+    expectedHeaderOrder.forEach((field, index) => {
+      if (actualHeaders[index] === field.label) {
+        fieldMap[field.key] = index;
       }
     });
 
-    const missingRequiredHeaders = expectedHeaderOrder
-      .filter(({ key }) => {
-        const field = systemFields.find((f) => f.key === key);
-        return field?.required && fieldMap[key] === undefined;
-      })
-      .map(({ label }) => label);
-
     const warnings: string[] = [];
+    if (!exactHeaderMatch) {
+      warnings.push(
+        'Header row does not exactly match the required import template. Please use the exact headers in the exact order shown below.'
+      );
+    }
+
+    const missingRequiredHeaders = expectedHeaderOrder
+      .filter((field) => field.required && fieldMap[field.key] === undefined)
+      .map((field) => field.label);
+
     if (missingRequiredHeaders.length > 0) {
       warnings.push(
         `Missing required columns: ${missingRequiredHeaders.join(', ')}. Please update your file headers or choose a different file.`
       );
     }
 
-    setHeaders(actualHeaders);
+    setHeaders(incomingHeaders.map((h) => String(h).trim()));
     setRawData(actualData);
     setFieldToColumnMap(fieldMap);
     setPreviewErrors(warnings);
@@ -224,6 +200,19 @@ export function Import() {
 
   const performImport = async () => {
     setIsImporting(true);
+
+    try {
+      await store.clearAssets();
+    } catch (err: any) {
+      console.error('Error clearing existing assets before import:', err);
+      setImportResult({
+        success: 0,
+        failed: 0,
+        errors: ['Failed to clear existing asset data before import.']
+      });
+      setIsImporting(false);
+      return;
+    }
 
     const assetsToImport = rawData
       .map((row: any[], rowIndex) => {
