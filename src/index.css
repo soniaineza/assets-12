@@ -1,0 +1,29 @@
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-paper-dark text-ink min-h-screen font-sans antialiased;
+  }
+
+  h1, h2, h3, .font-serif {
+    font-family: 'Crimson Pro', serif;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer components {
+  .border-rule {
+    border-color: theme('colors.rule');
+  }
+  
+  .border-rule-soft {
+    @apply border-[#e5e3db];
+  }
+}
