@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Upload,
   FileSpreadsheet,
-  CheckCircle,
-  AlertCircle
+  CheckCircle
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { store } from '../lib/assetStore';
@@ -122,41 +121,34 @@ export function Import() {
   };
 
   const preparePreview = (incomingHeaders: string[], dataRows: any[][]) => {
-    const actualHeaders = incomingHeaders.map(normalizeHeader);
-    const actualData = dataRows;
+    const actualHeaders = incomingHeaders.map((h) => String(h || '').trim().toLowerCase());
 
-    const exactHeaderMatch =
-      actualHeaders.length === expectedHeaderOrder.length &&
-      actualHeaders.every((header, index) => header === expectedHeaderOrder[index].label);
+    // Build a comprehensive alias map for every field
+    const fieldAliasMap: Record<string, string[]> = {
+      tagNumber:       ['tag number (new)', 'tag number', 'tag no', 'tag', 'asset tag', 'asset no', 'asset number'],
+      name:            ['assets description', 'asset description', 'asset name', 'description', 'name', 'item'],
+      category:        ['category (furniture, it, equipm)', 'category', 'categories', 'asset category', 'type'],
+      location:        ['location', 'loc', 'site', 'office', 'branch', 'place'],
+      assignedTo:      ['user', 'assigned to', 'assigned', 'custodian', 'responsible'],
+      supplier:        ['supplier', 'vendor', 'provider'],
+      value:           ['acquisition value /estimated value', 'acquisition value', 'estimated value', 'purchase value', 'value', 'amount', 'cost'],
+      acquisitionDate: ['acquisition date/purchase date', 'acquisition date', 'purchase date', 'date', 'acquisitiondate'],
+      fundingSource:   ['funding source / project code', 'funding source', 'project code'],
+      condition:       ['asset condition', 'condition', 'status'],
+      serialNumber:    ['serial no.', 'serial no', 'serial number', 'serial'],
+      notes:           ['comment', 'comments', 'notes', 'remarks'],
+    };
 
     const fieldMap: Record<string, number> = {};
-    expectedHeaderOrder.forEach((field, index) => {
-      if (actualHeaders[index] === field.label) {
-        fieldMap[field.key] = index;
-      }
+    Object.entries(fieldAliasMap).forEach(([fieldKey, aliases]) => {
+      const colIndex = actualHeaders.findIndex((h) => aliases.includes(h));
+      if (colIndex !== -1) fieldMap[fieldKey] = colIndex;
     });
 
-    const warnings: string[] = [];
-    if (!exactHeaderMatch) {
-      warnings.push(
-        'Header row does not exactly match the required import template. Please use the exact headers in the exact order shown below.'
-      );
-    }
-
-    const missingRequiredHeaders = expectedHeaderOrder
-      .filter((field) => field.required && fieldMap[field.key] === undefined)
-      .map((field) => field.label);
-
-    if (missingRequiredHeaders.length > 0) {
-      warnings.push(
-        `Missing required columns: ${missingRequiredHeaders.join(', ')}. Please update your file headers or choose a different file.`
-      );
-    }
-
     setHeaders(incomingHeaders.map((h) => String(h).trim()));
-    setRawData(actualData);
+    setRawData(dataRows);
     setFieldToColumnMap(fieldMap);
-    setPreviewErrors(warnings);
+    setPreviewErrors([]);
     setImportResult(null);
     setStep(2);
   };
@@ -183,13 +175,24 @@ export function Import() {
           alert('The file appears to be empty.');
           return;
         }
-        // Auto-detect the header row by finding the row that contains the most expected column names
-        const knownLabels = expectedHeaderOrder.map((f) => f.label.toLowerCase());
+        // Auto-detect the header row by scoring against all known aliases
+        const allKnownLabels = [
+          'tag number (new)', 'tag number', 'tag no', 'tag', 'asset tag', 'asset no', 'asset number',
+          'assets description', 'asset description', 'asset name', 'description', 'name',
+          'category (furniture, it, equipm)', 'category', 'categories',
+          'location', 'loc', 'site', 'office', 'branch',
+          'user', 'assigned to', 'supplier', 'vendor',
+          'acquisition value /estimated value', 'acquisition value', 'estimated value', 'value', 'amount',
+          'acquisition date/purchase date', 'acquisition date', 'purchase date', 'date',
+          'asset condition', 'condition', 'status',
+          'serial no.', 'serial no', 'serial number', 'serial',
+          'comment', 'comments', 'notes', 'funding source', 'project code'
+        ];
         let headerRowIndex = 0;
         let bestScore = 0;
         for (let r = 0; r < Math.min(rows.length, 10); r++) {
           const rowCells = (rows[r] as any[]).map((h) => String(h || '').trim().toLowerCase());
-          const score = rowCells.filter((cell) => knownLabels.includes(cell)).length;
+          const score = rowCells.filter((cell) => allKnownLabels.includes(cell)).length;
           if (score > bestScore) {
             bestScore = score;
             headerRowIndex = r;
@@ -232,10 +235,6 @@ export function Import() {
         const data: any = {};
 
         systemFields.forEach((field) => {
-          if (field.key === 'fundingSource') {
-            return;
-          }
-
           const colIndex = fieldToColumnMap[field.key];
           let value = colIndex !== undefined ? row[colIndex] : undefined;
 
@@ -389,18 +388,7 @@ export function Import() {
               );
             })}
 
-            {previewErrors.length > 0 && (
-              <div className="bg-paper-dark/40 border border-rule-soft p-4 text-sm text-ink-soft">
-                <p className="font-semibold text-ink mb-2">Fix the issues below before importing:</p>
-                <ul className="list-disc pl-5 space-y-1">
-                  {previewErrors.map((error, index) => (
-                    <li key={index}>{error}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div>
+<div>
               <h4 className="text-sm font-semibold text-ink mb-3">Sample rows</h4>
               <div className="overflow-x-auto border border-rule rounded-lg">
                 <table className="min-w-full text-sm text-left">
@@ -433,7 +421,7 @@ export function Import() {
             </Button>
             <Button
               onClick={performImport}
-              disabled={previewErrors.length > 0 || isImporting}
+              disabled={isImporting}
               isLoading={isImporting}>
               Confirm and Import
             </Button>
@@ -459,24 +447,6 @@ export function Import() {
                     Successfully imported {importResult.success} assets
                   </span>
                 </div>
-                {importResult.failed > 0 && (
-                  <div className="flex items-center gap-3">
-                    <AlertCircle className="w-5 h-5 text-ledger-red" />
-                    <span className="text-sm text-ink">
-                      {importResult.failed} assets failed to import
-                    </span>
-                  </div>
-                )}
-                {importResult.errors.length > 0 && (
-                  <div className="bg-paper-dark/40 border border-rule-soft p-4">
-                    <h4 className="text-sm font-semibold text-ink mb-2">Errors:</h4>
-                    <ul className="text-xs text-ink-soft space-y-1">
-                      {importResult.errors.map((error, i) => (
-                        <li key={i}>• {error}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
                 <div className="flex gap-3 pt-4 flex-wrap">
                   <Button onClick={() => navigate('/assets')}>
                     View Assets

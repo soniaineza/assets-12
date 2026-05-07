@@ -17,6 +17,7 @@ export interface Asset {
   location: string;
   assignedTo?: string;
   supplier?: string;
+  fundingSource?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;

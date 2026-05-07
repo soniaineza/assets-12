@@ -76,6 +76,7 @@ class AssetStore {
       supplier: assetData.supplier || null,
       notes: assetData.notes || null,
       insurance_expiry: assetData.insuranceExpiry || null,
+      funding_source: assetData.fundingSource || null,
       created_at: now,
       updated_at: now,
       deleted_at: null
@@ -131,6 +132,7 @@ class AssetStore {
     if (updates.supplier !== undefined) updateData.supplier = updates.supplier;
     if (updates.notes !== undefined) updateData.notes = updates.notes;
     if (updates.insuranceExpiry !== undefined) updateData.insurance_expiry = updates.insuranceExpiry;
+    if (updates.fundingSource !== undefined) updateData.funding_source = updates.fundingSource;
 
     const { data, error } = await supabase
       .from('assets')
@@ -231,6 +233,7 @@ class AssetStore {
           supplier: assetData.supplier || null,
           notes: assetData.notes || null,
           insurance_expiry: assetData.insuranceExpiry || null,
+          funding_source: assetData.fundingSource || null,
           created_at: now,
           updated_at: now,
           deleted_at: null
@@ -319,7 +322,8 @@ class AssetStore {
       createdAt: dbAsset.created_at,
       updatedAt: dbAsset.updated_at,
       deletedAt: dbAsset.deleted_at,
-      insuranceExpiry: dbAsset.insurance_expiry
+      insuranceExpiry: dbAsset.insurance_expiry,
+      fundingSource: dbAsset.funding_source
     };
   }
 }
