@@ -171,11 +171,10 @@ class AssetStore {
   }
 
   async clearAssets(): Promise<void> {
-    const now = new Date().toISOString();
     const { error } = await supabase
       .from('assets')
-      .update({ deleted_at: now })
-      .is('deleted_at', null);
+      .delete()
+      .not('id', 'is', null);
 
     if (error) {
       console.error('Error clearing assets:', error);
@@ -245,23 +244,48 @@ class AssetStore {
       }
     }
 
-    // Second pass: Perform a single batch insert for all new assets
+    // Insert in chunks of 100; fall back row-by-row if a chunk fails
     if (assetsToCreate.length > 0) {
-      const { data, error } = await supabase
-        .from('assets')
-        .insert(assetsToCreate)
-        .select('id, tag_number'); // Select minimal data to confirm insertion
+      const chunkSize = 100;
+      const insertedAssets: { id: string; tag_number: string }[] = [];
 
-      if (error) {
-        failed += assetsToCreate.length; // Assume all remaining failed if batch insert fails
-        errors.push(`Batch insert failed: ${error.message}`);
-        console.error('Batch insert error:', error);
-      } else {
-        success += data.length;
-        // Log creation for each successfully imported asset
-        for (const asset of data) {
-          await this.logChange(asset.id, 'CREATED', null, `Asset Imported: ${asset.tag_number}`);
+      for (let i = 0; i < assetsToCreate.length; i += chunkSize) {
+        const chunk = assetsToCreate.slice(i, i + chunkSize);
+        const { data, error } = await supabase
+          .from('assets')
+          .insert(chunk)
+          .select('id, tag_number');
+
+        if (error) {
+          for (const asset of chunk) {
+            const { data: single, error: singleErr } = await supabase
+              .from('assets')
+              .insert([asset])
+              .select('id, tag_number');
+            if (!singleErr && single && single.length > 0) {
+              success++;
+              insertedAssets.push(single[0]);
+            } else {
+              failed++;
+            }
+          }
+        } else {
+          success += data.length;
+          insertedAssets.push(...data);
         }
+      }
+
+      // Batch log all insertions in one call
+      if (insertedAssets.length > 0) {
+        await supabase.from('change_logs').insert(
+          insertedAssets.map((a) => ({
+            asset_id: a.id,
+            field: 'CREATED',
+            old_value: null,
+            new_value: `Asset Imported: ${a.tag_number}`,
+            timestamp: now,
+          }))
+        );
       }
     }
     return { success, failed, errors };
@@ -323,7 +347,8 @@ class AssetStore {
       updatedAt: dbAsset.updated_at,
       deletedAt: dbAsset.deleted_at,
       insuranceExpiry: dbAsset.insurance_expiry,
-      fundingSource: dbAsset.funding_source
+      fundingSource: dbAsset.funding_source,
+      sheetName: dbAsset.sheet_name
     };
   }
 }

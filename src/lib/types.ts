@@ -19,6 +19,7 @@ export interface Asset {
   supplier?: string;
   fundingSource?: string;
   notes?: string;
+  sheetName?: string;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;

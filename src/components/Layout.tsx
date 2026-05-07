@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
 import { Outlet, NavLink, Link } from 'react-router-dom';
-import { Menu, X, BookOpen } from 'lucide-react';
-export function Layout() {
+import { Menu, X, BookOpen, LogOut, User } from 'lucide-react';
+import { AuthUser } from '../App';
+
+interface Props {
+  user: AuthUser;
+  onLogout: () => void;
+}
+
+export function Layout({ user, onLogout }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navItems = [
   {
@@ -37,17 +44,22 @@ export function Layout() {
                 </p>
               </div>
             </Link>
-            <div className="hidden sm:block text-right">
-              <p className="text-[11px] uppercase tracking-wider text-ink-muted">
-                Volume I
-              </p>
-              <p className="font-mono text-xs text-ink-soft">
-                {new Date().toLocaleDateString('en-GB', {
-                  day: '2-digit',
-                  month: 'short',
-                  year: 'numeric'
-                })}
-              </p>
+            <div className="hidden sm:flex items-center gap-4">
+              <div className="text-right">
+                <p className="text-xs font-semibold text-ink">{user.name}</p>
+                <p className="text-[10px] uppercase tracking-wider text-ink-muted">{user.role}</p>
+              </div>
+              <div className="w-8 h-8 border border-rule bg-paper-dark flex items-center justify-center">
+                <User className="w-4 h-4 text-ink-soft" />
+              </div>
+              <button
+                onClick={onLogout}
+                className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ledger-red uppercase tracking-wider font-semibold border border-rule px-3 py-1.5 hover:border-ledger-red transition-colors"
+                title="Sign out"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                Sign Out
+              </button>
             </div>
             <button
               onClick={() => setMobileOpen(!mobileOpen)}
