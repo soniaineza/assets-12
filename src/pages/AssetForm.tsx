@@ -29,9 +29,52 @@ function toDb(col: string): string | null {
   return COL_TO_DB[col.toLowerCase()] || null;
 }
 
+
+function tryParseCustomNotes(notes: string | null | undefined): {
+  legacyText: string;
+  custom: Record<string, string>;
+} {
+  if (!notes) return { legacyText: '', custom: {} };
+
+  const trimmed = notes.trim();
+  if (!trimmed) return { legacyText: '', custom: {} };
+
+  // Expect JSON in the form: {"__customFields": true, "fields": {...}}
+  if (trimmed.startsWith('{') && trimmed.includes('__customFields')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const fields = parsed?.fields;
+      if (parsed?.__customFields === true && fields && typeof fields === 'object') {
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(fields as Record<string, any>)) {
+          out[k] = v == null ? '' : String(v);
+        }
+        return { legacyText: '', custom: out };
+      }
+    } catch {
+      // fallthrough
+    }
+  }
+
+  // Legacy plain-text notes
+  return { legacyText: notes, custom: {} };
+}
+
+function buildCustomNotesJSON(custom: Record<string, string>, legacyText?: string) {
+  const payload = {
+    __customFields: true,
+    fields: custom,
+    legacyText: legacyText?.trim() ? legacyText.trim() : undefined,
+  };
+  return JSON.stringify(payload);
+}
+
+
 function sanitizeDate(v: string): string {
   if (!v?.trim()) return new Date().toISOString().split('T')[0];
-  const dmy = v.trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  const dmy = v.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+
+
   if (dmy) {
     const d = new Date(`${dmy[3]}-${dmy[2].padStart(2,'0')}-${dmy[1].padStart(2,'0')}`);
     if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
@@ -40,16 +83,28 @@ function sanitizeDate(v: string): string {
   return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 }
 
+interface ColumnDef {
+  key: string; // stable identifier used for DB mapping & notes
+  label: string; // editable UI label
+}
+
 interface Sheet {
   id: string;
   name: string;
-  columns: string[];
-  rows: Record<string, string>[];
+  columns: ColumnDef[];
+  rows: Record<string, string>[]; // indexed by ColumnDef.key
 }
 
+
 function makeSheet(name: string, columns = DEFAULT_COLUMNS): Sheet {
-  return { id: crypto.randomUUID(), name, columns: [...columns], rows: [{}] };
+  return {
+    id: crypto.randomUUID(),
+    name,
+    columns: columns.map((c) => ({ key: c, label: c })),
+    rows: [{}],
+  };
 }
+
 
 // All known system headers a user can pick from
 const SYSTEM_HEADERS = [
@@ -123,31 +178,44 @@ export function AssetForm() {
 
   // Column actions
   const addColumn = () => {
-    const name = newColName.trim();
-    if (!name || active.columns.includes(name)) return;
-    updateSheet(activeId, s => ({ ...s, columns: [...s.columns, name] }));
+    const label = newColName.trim();
+    if (!label) return;
+    if (active.columns.some((c) => c.label === label || c.key === label)) return;
+
+    const key = label;
+    updateSheet(activeId, (s) => ({
+      ...s,
+      columns: [...s.columns, { key, label }],
+    }));
     setNewColName('');
   };
 
-  const removeColumn = (col: string) =>
-    updateSheet(activeId, s => ({
+  const removeColumn = (colKey: string) =>
+    updateSheet(activeId, (s) => ({
       ...s,
-      columns: s.columns.filter(c => c !== col),
-      rows: s.rows.map(r => { const nr = { ...r }; delete nr[col]; return nr; }),
+      columns: s.columns.filter((c) => c.key !== colKey),
+      rows: s.rows.map((r) => {
+        const nr = { ...r };
+        delete nr[colKey];
+        return nr;
+      }),
     }));
 
   // Row actions
-  const addRow = () => updateSheet(activeId, s => ({ ...s, rows: [...s.rows, {}] }));
+  const addRow = () => updateSheet(activeId, (s) => ({ ...s, rows: [...s.rows, {}] }));
 
   const removeRow = (ri: number) =>
-    updateSheet(activeId, s => ({
-      ...s, rows: s.rows.length > 1 ? s.rows.filter((_, i) => i !== ri) : s.rows,
+    updateSheet(activeId, (s) => ({
+      ...s,
+      rows: s.rows.length > 1 ? s.rows.filter((_, i) => i !== ri) : s.rows,
     }));
 
-  const updateCell = (ri: number, col: string, val: string) =>
-    updateSheet(activeId, s => ({
-      ...s, rows: s.rows.map((r, i) => i === ri ? { ...r, [col]: val } : r),
+  const updateCell = (ri: number, colKey: string, val: string) =>
+    updateSheet(activeId, (s) => ({
+      ...s,
+      rows: s.rows.map((r, i) => (i === ri ? { ...r, [colKey]: val } : r)),
     }));
+
 
   // Save
   const handleSave = async () => {
@@ -161,19 +229,46 @@ export function AssetForm() {
         const rec: any = { created_at: now, updated_at: now, deleted_at: null, sheet_name: sheet.name };
         const extra: string[] = [];
 
-        sheet.columns.forEach(col => {
-          const val = row[col]?.trim() || null;
-          const dbKey = toDb(col);
+        sheet.columns.forEach((col) => {
+          const val = row[col.key]?.trim() || null;
+
+          // IMPORTANT:
+          // - Use stable col.key for DB mapping (so renaming col.label does not break persistence)
+          // - Use label only for UI/custom-field display
+          const dbKey = toDb(col.key);
+
           if (dbKey) {
             if (dbKey === 'value') rec[dbKey] = val ? parseFloat(val.replace(/[^0-9.-]/g, '')) || 0 : 0;
             else if (dbKey === 'acquisition_date') rec[dbKey] = sanitizeDate(val || '');
             else if (!rec[dbKey]) rec[dbKey] = val;
           } else if (val) {
-            extra.push(`${col}: ${val}`);
+            extra.push(`${col.key}: ${val}`);
           }
         });
 
-        if (extra.length > 0) rec.notes = rec.notes ? `${rec.notes} | ${extra.join(' | ')}` : extra.join(' | ');
+
+        // Store custom (non-system) columns in notes as JSON
+        // so they can be rendered/edit later.
+        if (extra.length > 0) {
+          // extra is already "{Column}: {value}"; convert to key/value by splitting only on first ':'
+          const custom: Record<string, string> = {};
+          for (const item of extra) {
+            const idx = item.indexOf(':');
+            if (idx === -1) continue;
+            const k = item.slice(0, idx).trim();
+            const v = item.slice(idx + 1).trim();
+            if (k) custom[k] = v;
+          }
+
+          const parsedExisting = tryParseCustomNotes(rec.notes);
+          const legacyText = parsedExisting.legacyText;
+          // Preserve legacy text (if any), overwrite custom fields with latest
+          rec.notes = buildCustomNotesJSON({
+            ...parsedExisting.custom,
+            ...custom,
+          }, legacyText);
+        }
+
 
         if (!rec.tag_number) rec.tag_number = `ENTRY-${Date.now()}-${Math.random().toString(36).slice(2,5)}`;
         if (!rec.name) rec.name = rec.tag_number;
@@ -281,26 +376,45 @@ export function AssetForm() {
               <div className="absolute top-full left-0 z-50 bg-paper-light border border-rule shadow-md w-52 max-h-56 overflow-y-auto">
                 {/* Existing DB headers */}
                 {dbHeaders
-                  .filter(h => !active.columns.includes(h) && h.toLowerCase().includes(newColName.toLowerCase()))
-                  .map(h => (
+                  .filter(
+                    (h) =>
+                      !active.columns.some((c) => c.key === h) &&
+                      h.toLowerCase().includes(newColName.toLowerCase())
+                  )
+                  .map((h) => (
                     <button
                       key={h}
-                      onMouseDown={e => { e.preventDefault(); setNewColName(h); updateSheet(activeId, s => ({ ...s, columns: [...s.columns, h] })); setNewColName(''); setShowColDropdown(false); }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setNewColName(h);
+                        updateSheet(activeId, (s) => ({
+                          ...s,
+                          columns: [...s.columns, { key: h, label: h }],
+                        }));
+                        setNewColName('');
+                        setShowColDropdown(false);
+                      }}
                       className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-paper-dark/40 border-b border-rule/40 last:border-0"
                     >
                       {h}
                     </button>
-                  ))
-                }
+                  ))}
                 {/* Option to create new custom column */}
-                {newColName.trim() && !dbHeaders.includes(newColName.trim()) && !active.columns.includes(newColName.trim()) && (
-                  <button
-                    onMouseDown={e => { e.preventDefault(); addColumn(); setShowColDropdown(false); }}
-                    className="w-full text-left px-3 py-2 text-xs text-ledger-green hover:bg-paper-dark/40 font-semibold"
-                  >
-                    + Create "{newColName.trim()}"
-                  </button>
-                )}
+                {newColName.trim() &&
+                  !dbHeaders.includes(newColName.trim()) &&
+                  !active.columns.some((c) => c.key === newColName.trim()) && (
+                    <button
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        addColumn();
+                        setShowColDropdown(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs text-ledger-green hover:bg-paper-dark/40 font-semibold"
+                    >
+                      + Create "{newColName.trim()}"
+                    </button>
+                  )}
+
               </div>
             )}
           </div>
@@ -318,12 +432,26 @@ export function AssetForm() {
             <thead>
               <tr className="bg-paper-dark/60 border-b-2 border-ink">
                 <th className="px-2 py-3 w-8 text-ink-muted text-xs font-normal">#</th>
-                {active.columns.map(col => (
-                  <th key={col} className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-ink whitespace-nowrap">
+                {active.columns.map((col) => (
+                  <th
+                    key={col.key}
+                    className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-ink whitespace-nowrap"
+                  >
                     <div className="flex items-center gap-1">
-                      <span>{col}</span>
+                      <input
+                        value={col.label}
+                        onChange={(e) =>
+                          updateSheet(activeId, (s) => ({
+                            ...s,
+                            columns: s.columns.map((c) =>
+                              c.key === col.key ? { ...c, label: e.target.value } : c
+                            ),
+                          }))
+                        }
+                        className="bg-transparent outline-none w-full focus:border-ink border border-transparent hover:border-rule px-1 rounded"
+                      />
                       <button
-                        onClick={() => removeColumn(col)}
+                        onClick={() => removeColumn(col.key)}
                         className="text-ink-muted hover:text-ledger-red opacity-0 hover:opacity-100 group-hover:opacity-100 ml-1"
                         title="Remove column"
                       >
@@ -333,23 +461,25 @@ export function AssetForm() {
                   </th>
                 ))}
                 <th className="px-2 py-3 w-8" />
+
               </tr>
             </thead>
             <tbody>
               {active.rows.map((row, ri) => (
                 <tr key={ri} className={`border-b border-rule-soft hover:bg-paper-dark/20 ${ri % 2 === 1 ? 'bg-paper-dark/10' : ''}`}>
                   <td className="px-2 py-1 text-xs text-ink-muted text-center">{ri + 1}</td>
-                  {active.columns.map(col => (
-                    <td key={col} className="px-1 py-1">
+                  {active.columns.map((col) => (
+                    <td key={col.key} className="px-1 py-1">
                       <input
                         type="text"
-                        value={row[col] || ''}
-                        onChange={e => updateCell(ri, col, e.target.value)}
+                        value={row[col.key] || ''}
+                        onChange={(e) => updateCell(ri, col.key, e.target.value)}
                         className="w-full min-w-[110px] px-2 py-1.5 text-sm text-ink bg-transparent border border-transparent hover:border-rule focus:border-ink focus:outline-none focus:bg-white"
                         placeholder="—"
                       />
                     </td>
                   ))}
+
                   <td className="px-2 py-1 text-center">
                     <button onClick={() => removeRow(ri)} className="text-ink-muted hover:text-ledger-red">
                       <Trash2 className="w-3.5 h-3.5" />

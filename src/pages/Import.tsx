@@ -69,7 +69,8 @@ function sanitizeDate(raw: any): string {
   }
   const s = String(raw).trim();
   // DD/MM/YYYY or DD-MM-YYYY
-  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  const dmy = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+
   if (dmy) {
     const d = new Date(`${dmy[3]}-${dmy[2].padStart(2,'0')}-${dmy[1].padStart(2,'0')}`);
     if (!isNaN(d.getTime()) && d.getFullYear() > 1900 && d.getFullYear() < 2100)
@@ -208,9 +209,8 @@ export function Import() {
     setIsImporting(true);
     const now = new Date().toISOString();
 
-    await supabase.from('assets').delete().not('id', 'is', null);
-
     let totalSuccess = 0, totalFailed = 0;
+
     const insertedIds: { id: string; tag_number: string }[] = [];
     const seenTags = new Set<string>();
 
@@ -225,19 +225,27 @@ export function Import() {
       }
       if (records.length === 0) continue;
 
-      // Insert in chunks of 100
+      // UPSERT by tag_number in chunks of 100
       for (let i = 0; i < records.length; i += 100) {
         const chunk = records.slice(i, i + 100);
-        const { data, error } = await supabase.from('assets').insert(chunk).select('id, tag_number');
+
+        // Use Postgres upsert via unique constraint on tag_number.
+        // Supabase client supports upsert() for PostgREST.
+        const { data, error } = await supabase
+          .from('assets')
+          .upsert(chunk, { onConflict: 'tag_number' })
+          .select('id, tag_number');
+
         if (error) {
-          console.error(`Sheet "${sheet.name}" error:`, error.message);
+          console.error(`Sheet "${sheet.name}" upsert error:`, error.message);
           totalFailed += chunk.length;
         } else {
-          totalSuccess += data.length;
-          insertedIds.push(...data);
+          totalSuccess += data?.length ?? 0;
+          insertedIds.push(...(data || []));
         }
       }
     }
+
 
     // Batch log
     if (insertedIds.length > 0) {

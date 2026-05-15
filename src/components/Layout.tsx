@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
+
 import { Outlet, NavLink, Link } from 'react-router-dom';
 import { Menu, X, BookOpen, LogOut, User } from 'lucide-react';
 import { AuthUser } from '../App';

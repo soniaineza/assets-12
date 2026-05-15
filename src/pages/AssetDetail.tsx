@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Edit2, Trash2 } from 'lucide-react';
 
@@ -71,12 +72,36 @@ export function AssetDetail() {
         });
   };
 
+  const { legacyText: legacyNotesText, custom: customFields } = (() => {
+    const raw = asset.notes || '';
+    if (!raw) return { legacyText: '', custom: {} as Record<string, string> };
+
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('{') && trimmed.includes('__customFields')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed?.__customFields === true && parsed?.fields && typeof parsed.fields === 'object') {
+          const out: Record<string, string> = {};
+          for (const [k, v] of Object.entries(parsed.fields as Record<string, any>)) {
+            out[k] = v == null ? '' : String(v);
+          }
+          return { legacyText: parsed?.legacyText || '', custom: out };
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return { legacyText: raw, custom: {} as Record<string, string> };
+  })();
+
   const fields = [
     {
       label: 'Tag Number',
       value: asset.tagNumber,
       mono: true,
     },
+
     {
       label: 'Description',
       value: asset.name,
@@ -218,10 +243,34 @@ export function AssetDetail() {
             </dt>
 
             <dd className="text-sm text-ink whitespace-pre-wrap font-serif italic">
-              "{asset.notes}"
+              {asset.notes.startsWith('{') && asset.notes.includes('__customFields')
+                ? legacyNotesText || '—'
+                : `"${asset.notes}"`}
             </dd>
           </div>
         )}
+
+        {Object.keys(customFields).length > 0 && (
+          <div className="px-6 py-4 border-t border-rule bg-paper-dark/30">
+            <dt className="text-[11px] uppercase tracking-wider text-ink-muted font-semibold mb-2">
+              Custom Fields
+            </dt>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+              {Object.entries(customFields)
+                .sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
+                .map(([k, v]) => (
+                  <div key={k}>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-1">
+                      {k}
+                    </p>
+                    <p className="text-sm text-ink">{v || '—'}</p>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+
+
       </div>
 
       {/* History */}
