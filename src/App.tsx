@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { AssetList } from './pages/AssetList';
 import { AssetForm } from './pages/AssetForm';
+import { AssetEdit } from './pages/AssetEdit';
 import { AssetDetail } from './pages/AssetDetail';
 import { Import } from './pages/Import';
 import { Login } from './pages/Login';
@@ -40,7 +41,7 @@ export function App() {
           <Route path="assets" element={<AssetList />} />
           <Route path="assets/new" element={<AssetForm />} />
           <Route path="assets/:id" element={<AssetDetail />} />
-          <Route path="assets/:id/edit" element={<AssetForm />} />
+          <Route path="assets/:id/edit" element={<AssetEdit />} />
           <Route path="import" element={<Import />} />
         </Route>
       </Routes>

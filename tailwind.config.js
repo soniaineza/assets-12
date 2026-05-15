@@ -19,6 +19,7 @@ export default {
         ledger: {
           green: '#2d5a27',
           red: '#9b2c2c',
+          amber: '#92400e',
         },
         rule: '#d1cfc7',
       },
