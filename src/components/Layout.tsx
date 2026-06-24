@@ -1,9 +1,10 @@
 import { useState } from 'react';
 
 import { Outlet, NavLink, Link } from 'react-router-dom';
-import { Menu, X, BookOpen, LogOut, User, Globe } from 'lucide-react';
+import { Menu, X, BookOpen, LogOut, User, HelpCircle } from 'lucide-react';
 import { AuthUser } from '../App';
 import { useI18n } from '../lib/i18n';
+import { HelpGuide } from './HelpGuide';
 
 interface Props {
   user: AuthUser;
@@ -13,6 +14,7 @@ interface Props {
 export function Layout({ user, onLogout }: Props) {
   const { t, language, setLanguage } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const navItems = [
   {
     to: '/assets',
@@ -56,12 +58,12 @@ export function Layout({ user, onLogout }: Props) {
                 <User className="w-4 h-4 text-ink-soft" />
               </div>
               <button
-                onClick={() => setLanguage(language === 'en' ? 'rw' : 'en')}
+                onClick={() => setHelpOpen(true)}
                 className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ledger-green uppercase tracking-wider font-semibold border border-rule px-3 py-1.5 hover:border-ledger-green transition-colors"
-                title={language === 'en' ? 'Kinyarwanda' : 'English'}
+                title="Help Guide"
               >
-                <Globe className="w-3.5 h-3.5" />
-                {language === 'en' ? 'RW' : 'EN'}
+                <HelpCircle className="w-3.5 h-3.5" />
+                Help
               </button>
               <button
                 onClick={onLogout}
@@ -134,6 +136,8 @@ export function Layout({ user, onLogout }: Props) {
           <span className="font-mono">v1.0</span>
         </div>
       </footer>
+
+      <HelpGuide open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>);
 
 }
