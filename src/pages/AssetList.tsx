@@ -1,41 +1,51 @@
-import { useEffect, useMemo, useState } from 'react';
-
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Search, Edit2, Trash2, Eye, FileSpreadsheet } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { store } from '../lib/assetStore';
 import { Asset } from '../lib/types';
+import {
+  getAllColumnKeys,
+  getAllColumnLabels,
+  getCustomColumnValue,
+  tryParseCustomFieldsNotes,
+  buildCustomFieldsNotes,
+} from '../lib/customFields';
+import { useI18n } from '../lib/i18n';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Select } from '../components/ui/Select';
-import { Badge } from '../components/ui/Badge';
 
-const COLUMNS: { key: keyof Asset | 'actions'; label: string; sortable?: boolean }[] = [
-  { key: 'tagNumber',        label: 'Tag Number (New)',                              sortable: true },
-  { key: 'name',             label: 'Assets Description',                            sortable: true },
-  { key: 'category',         label: 'Category',                                      sortable: true },
-  { key: 'location',         label: 'LOCATION',                                      sortable: true },
-  { key: 'assignedTo',       label: 'User',                                          sortable: true },
-  { key: 'supplier',         label: 'Supplier',                                      sortable: true },
-  { key: 'value',            label: 'Acquisition Value / Estimated Value',           sortable: true },
-  { key: 'acquisitionDate',  label: 'Acquisition Date / Purchase Date',              sortable: true },
-  { key: 'fundingSource',    label: 'Funding Source / Project Code',                 sortable: false },
-  { key: 'condition',        label: 'Asset Condition',                               sortable: true },
-  { key: 'serialNumber',     label: 'Serial No.',                                    sortable: false },
-  { key: 'notes',            label: 'Comment',                                       sortable: false },
-  { key: 'actions',          label: 'Actions',                                       sortable: false },
-];
+function DynamicCell({ value, onSave }: { value: string; onSave: (val: string) => Promise<void> }) {
+  const [local, setLocal] = useState(value);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { setLocal(value); }, [value]);
+
+  return (
+    <input
+      className="w-full min-w-[100px] bg-transparent px-2 py-1.5 text-sm text-ink border border-transparent hover:border-rule focus:border-ink focus:outline-none focus:bg-paper-light"
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={async () => {
+        if (local === value) return;
+        setSaving(true);
+        await onSave(local);
+        setSaving(false);
+      }}
+      disabled={saving}
+    />
+  );
+}
 
 export function AssetList() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [conditionFilter, setConditionFilter] = useState('');
-  const [locationFilter, setLocationFilter] = useState('');
-  const [sortField, setSortField] = useState<keyof Asset>('tagNumber');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [sheetFilter, setSheetFilter] = useState('');
+  const [addingColumn, setAddingColumn] = useState(false);
+  const [newColumnKey, setNewColumnKey] = useState('');
 
   useEffect(() => { loadAssets(); }, []);
 
@@ -50,127 +60,123 @@ export function AssetList() {
     }
   };
 
-  const categories = useMemo(() => Array.from(new Set(assets.map((a) => a.category))).filter(Boolean), [assets]);
-  const locations   = useMemo(() => Array.from(new Set(assets.map((a) => a.location))).filter(Boolean),  [assets]);
-  const sheets      = useMemo(() => Array.from(new Set(assets.map((a) => a.sheetName))).filter(Boolean) as string[], [assets]);
-  const [sheetFilter, setSheetFilter] = useState('');
+  // Dynamically compute all column keys and labels from assets
+  const allColumnKeys = useMemo(() => getAllColumnKeys(assets), [assets]);
+  const allColumnLabels = useMemo(() => getAllColumnLabels(assets), [assets]);
 
-  const filtered = useMemo(() => {
-    let result = assets;
-    if (search) {
-      const q = search.toLowerCase();
-      result = result.filter((a) => a.name?.toLowerCase().includes(q) || a.tagNumber?.toLowerCase().includes(q));
-    }
-    if (categoryFilter)  result = result.filter((a) => a.category  === categoryFilter);
-    if (conditionFilter) result = result.filter((a) => a.condition  === conditionFilter);
-    if (locationFilter)  result = result.filter((a) => a.location   === locationFilter);
-    if (sheetFilter)     result = result.filter((a) => a.sheetName  === sheetFilter);
-    return [...result].sort((a, b) => {
-      const aVal = a[sortField], bVal = b[sortField];
-      if (aVal === bVal) return 0;
-      if (aVal == null) return 1;
-      if (bVal == null) return -1;
-      return (aVal > bVal ? 1 : -1) * (sortDirection === 'asc' ? 1 : -1);
+  // Sort columns alphabetically by label
+  const sortedColumns = useMemo(() =>
+    [...allColumnKeys].sort((a, b) =>
+      (allColumnLabels[a] || a).localeCompare(allColumnLabels[b] || b)
+    ),
+    [allColumnKeys, allColumnLabels]
+  );
+
+  const [columnKeys, setColumnKeys] = useState<string[]>(() => sortedColumns);
+  const [columnLabels, setColumnLabels] = useState<Record<string, string>>(() => allColumnLabels);
+
+  // Sync when assets change
+  useEffect(() => {
+    setColumnKeys(sortedColumns);
+    setColumnLabels((prev) => {
+      const merged = { ...allColumnLabels };
+      // Preserve any user-renamed labels
+      for (const k of Object.keys(prev)) {
+        if (k in merged) merged[k] = prev[k];
+      }
+      return merged;
     });
-  }, [assets, search, categoryFilter, conditionFilter, locationFilter, sheetFilter, sortField, sortDirection]);
+  }, [sortedColumns, allColumnLabels]);
 
-  const handleSort = (field: keyof Asset) => {
-    if (sortField === field) setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    else { setSortField(field); setSortDirection('asc'); }
-  };
+  const sheets = useMemo(
+    () => Array.from(new Set(assets.map((a) => a.sheetName))).filter(Boolean) as string[],
+    [assets]
+  );
+
+  const updateAssetNotes = useCallback(async (asset: Asset, key: string, value: string, label?: string) => {
+    const p = tryParseCustomFieldsNotes(asset.notes);
+    p.custom[key] = value;
+    if (label) p.labels[key] = label;
+    const nextNotes = buildCustomFieldsNotes(p.custom, p.legacyText, p.labels);
+    await store.updateAsset(asset.id, { notes: nextNotes } as any);
+  }, []);
 
   const handleDelete = async (id: string, name: string) => {
-    if (window.confirm(`Delete "${name}"? This action can be reversed by an administrator.`)) {
+    if (window.confirm(t('confirmDelete', { name }))) {
       try {
         await store.softDeleteAsset(id);
         await loadAssets();
       } catch {
-        alert('Failed to delete asset');
+        alert(t('failedDelete'));
       }
     }
   };
 
+  // Filtering: search across ALL column values
+  const filtered = useMemo(() => {
+    let result = assets;
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter((a) => {
+        // Search in all JSON fields
+        const p = tryParseCustomFieldsNotes(a.notes);
+        for (const v of Object.values(p.custom)) {
+          if (v.toLowerCase().includes(q)) return true;
+        }
+        // Also check DB fields for backward compat
+        if (a.tagNumber?.toLowerCase().includes(q)) return true;
+        if (a.name?.toLowerCase().includes(q)) return true;
+        return false;
+      });
+    }
+    if (sheetFilter) result = result.filter((a) => a.sheetName === sheetFilter);
+    return result;
+  }, [assets, search, sheetFilter]);
+
+  // Export to Excel
   const exportToExcel = () => {
     const today = new Date();
     const dateStr = today.toISOString().split('T')[0];
     const sheetsByName: Record<string, Asset[]> = {};
 
-    // Group assets by sheet name, fallback to 'Asset Register'
-    filtered.forEach(a => {
-      const sn = a.sheetName || 'Asset Register';
+    filtered.forEach((a) => {
+      const sn = a.sheetName || t('assetRegister');
       if (!sheetsByName[sn]) sheetsByName[sn] = [];
       sheetsByName[sn].push(a);
     });
 
     const wb = XLSX.utils.book_new();
-    const headers = [
-      'Tag Number (New)', 'Assets Description',
-      'Category (Furniture, IT, Equipment, Vehicle, Machinery, tools)',
-      'LOCATION', 'User', 'Supplier',
-      'Acquisition Value /Estimated Value',
-      'Acquisition date/Purchase Date',
-      'Funding Source / Project Code',
-      'Asset Condition', 'Serial No.', 'Comment',
-    ];
+    const headers = [...columnKeys.map((k) => columnLabels[k] || k)];
 
     Object.entries(sheetsByName).forEach(([sheetName, sheetAssets]) => {
-      const totalValue = sheetAssets.reduce((s, a) => s + (a.value || 0), 0);
-
-      // Row 1: Office title
-      // Row 2: Date
-      // Row 3: blank
-      // Row 4: "FIXED ASSET INFORMATION"
-      // Row 5: blank
-      // Row 6: headers (row index 5)
-      // Row 7+: data
-
       const aoa: any[][] = [
-        ['OFFICE: RWANDA', '', `DATE OF FIXED ASSET REGISTER: ${dateStr}`, ...Array(headers.length - 3).fill('')],
+        [t('officeRwanda'), '', `DATE OF FIXED ASSET REGISTER: ${dateStr}`, ...Array(headers.length - 3).fill('')],
         [],
-        ['FIXED ASSET INFORMATION', ...Array(headers.length - 1).fill('')],
+        [t('fixedAssetInfo'), ...Array(headers.length - 1).fill('')],
         [],
         headers,
-        ...sheetAssets.map(a => [
-          a.tagNumber || '',
-          a.name || '',
-          a.category || '',
-          a.location || '',
-          a.assignedTo || '',
-          a.supplier || '',
-          a.value || 0,
-          a.acquisitionDate || '',
-          a.fundingSource || '',
-          a.condition || '',
-          a.serialNumber || '',
-          a.notes || '',
-        ]),
-        // Total row
-        ['', `TOTAL: ${sheetAssets.length} entries`, '', '', '', '', totalValue, '', '', '', '', ''],
+        ...sheetAssets.map((a) =>
+          columnKeys.map((k) => getCustomColumnValue(a, k))
+        ),
+        [t('totalLabel', { n: sheetAssets.length }), ...Array(headers.length - 1).fill('')],
       ];
 
       const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const numCols = headers.length;
+      ws['!cols'] = columnKeys.map(() => ({ wch: 22 }));
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } },
+        { s: { r: 0, c: 2 }, e: { r: 0, c: numCols - 1 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: numCols - 1 } },
+      ];
 
-      const headerRowIdx = 4; // 0-based row index of the header row
+      const col = (c: number) => String.fromCharCode(65 + c);
+      const ref = (r: number, c: number) => `${col(c)}${r + 1}`;
+      const headerRowIdx = 4;
       const dataStartRow = 5;
       const dataEndRow = dataStartRow + sheetAssets.length - 1;
       const totalRowIdx = dataEndRow + 1;
-      const numCols = headers.length;
 
-      // Column widths
-      ws['!cols'] = [18, 38, 30, 25, 22, 22, 22, 20, 25, 15, 18, 35].map(wch => ({ wch }));
-
-      // Merge title cells
-      ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } },   // OFFICE: RWANDA
-        { s: { r: 0, c: 2 }, e: { r: 0, c: numCols - 1 } }, // date
-        { s: { r: 2, c: 0 }, e: { r: 2, c: numCols - 1 } }, // FIXED ASSET INFORMATION
-      ];
-
-      // Style helper
-      const col = (c: number) => String.fromCharCode(65 + c);
-      const ref = (r: number, c: number) => `${col(c)}${r + 1}`;
-
-      // Style title rows
       for (let c = 0; c < numCols; c++) {
         const titleCell = ws[ref(0, c)];
         if (titleCell) {
@@ -190,7 +196,6 @@ export function AssetList() {
         }
       }
 
-      // Style header row
       for (let c = 0; c < numCols; c++) {
         const cell = ws[ref(headerRowIdx, c)];
         if (cell) {
@@ -199,73 +204,57 @@ export function AssetList() {
             fill: { fgColor: { rgb: '1F3864' } },
             alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
             border: {
-              top:    { style: 'thin', color: { rgb: 'FFFFFF' } },
+              top: { style: 'thin', color: { rgb: 'FFFFFF' } },
               bottom: { style: 'thin', color: { rgb: 'FFFFFF' } },
-              left:   { style: 'thin', color: { rgb: 'FFFFFF' } },
-              right:  { style: 'thin', color: { rgb: 'FFFFFF' } },
+              left: { style: 'thin', color: { rgb: 'FFFFFF' } },
+              right: { style: 'thin', color: { rgb: 'FFFFFF' } },
             },
           };
         }
       }
 
-      // Style data rows — alternating
       for (let r = dataStartRow; r <= dataEndRow; r++) {
         const isEven = (r - dataStartRow) % 2 === 0;
         const fillColor = isEven ? 'FFFFFF' : 'EEF2F7';
         for (let c = 0; c < numCols; c++) {
-          const cell = ws[ref(r, c)];
-          if (!cell) {
-            ws[ref(r, c)] = { v: '', t: 's' };
-          }
+          if (!ws[ref(r, c)]) ws[ref(r, c)] = { v: '', t: 's' };
           ws[ref(r, c)].s = {
             font: { sz: 10 },
             fill: { fgColor: { rgb: fillColor } },
-            alignment: {
-              horizontal: c === 6 ? 'right' : 'left',
-              vertical: 'center',
-              wrapText: c === 1 || c === 11,
-            },
+            alignment: { horizontal: 'left', vertical: 'center' },
             border: {
-              top:    { style: 'hair', color: { rgb: 'CCCCCC' } },
+              top: { style: 'hair', color: { rgb: 'CCCCCC' } },
               bottom: { style: 'hair', color: { rgb: 'CCCCCC' } },
-              left:   { style: 'hair', color: { rgb: 'CCCCCC' } },
-              right:  { style: 'hair', color: { rgb: 'CCCCCC' } },
+              left: { style: 'hair', color: { rgb: 'CCCCCC' } },
+              right: { style: 'hair', color: { rgb: 'CCCCCC' } },
             },
           };
-          // Format value column as number
-          if (c === 6 && typeof ws[ref(r, c)].v === 'number') {
-            ws[ref(r, c)].z = '#,##0.00';
-          }
         }
       }
 
-      // Style total row
       for (let c = 0; c < numCols; c++) {
-        const cell = ws[ref(totalRowIdx, c)];
-        if (!cell) ws[ref(totalRowIdx, c)] = { v: '', t: 's' };
+        if (!ws[ref(totalRowIdx, c)]) ws[ref(totalRowIdx, c)] = { v: '', t: 's' };
         ws[ref(totalRowIdx, c)].s = {
           font: { bold: true, sz: 10, color: { rgb: '1F3864' } },
           fill: { fgColor: { rgb: 'D9E1F2' } },
-          alignment: { horizontal: c === 6 ? 'right' : c === 1 ? 'left' : 'center', vertical: 'center' },
+          alignment: { horizontal: 'center', vertical: 'center' },
           border: {
-            top:    { style: 'medium', color: { rgb: '1F3864' } },
+            top: { style: 'medium', color: { rgb: '1F3864' } },
             bottom: { style: 'medium', color: { rgb: '1F3864' } },
-            left:   { style: 'thin',   color: { rgb: '1F3864' } },
-            right:  { style: 'thin',   color: { rgb: '1F3864' } },
+            left: { style: 'thin', color: { rgb: '1F3864' } },
+            right: { style: 'thin', color: { rgb: '1F3864' } },
           },
         };
-        if (c === 6) ws[ref(totalRowIdx, c)].z = '#,##0.00';
       }
 
-      // Row heights
       ws['!rows'] = [
-        { hpt: 22 }, // title
-        { hpt: 6  }, // blank
-        { hpt: 20 }, // FIXED ASSET INFO
-        { hpt: 6  }, // blank
-        { hpt: 36 }, // header row — tall for wrap
+        { hpt: 22 },
+        { hpt: 6 },
+        { hpt: 20 },
+        { hpt: 6 },
+        { hpt: 36 },
         ...sheetAssets.map(() => ({ hpt: 18 })),
-        { hpt: 20 }, // total
+        { hpt: 20 },
       ];
 
       XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
@@ -274,12 +263,60 @@ export function AssetList() {
     XLSX.writeFile(wb, `Fixed_Assets_Register_${dateStr}.xlsx`);
   };
 
-  const conditionVariant = (c: string): any => {
-    if (c === 'New' || c === 'Good') return 'success';
-    if (c === 'Fair') return 'info';
-    if (c === 'Poor') return 'warning';
-    if (c === 'Damaged') return 'danger';
-    return 'neutral';
+  const addColumn = async (key: string) => {
+    const k = key.trim();
+    if (!k || columnKeys.includes(k)) return;
+    const nextKeys = [...columnKeys, k];
+    const nextLabels = { ...columnLabels, [k]: k };
+    setColumnKeys(nextKeys);
+    setColumnLabels(nextLabels);
+
+    await Promise.all(
+      assets
+        .filter((a) => (a.notes || '').includes('__customFields'))
+        .map((a) => {
+          const p = tryParseCustomFieldsNotes(a.notes);
+          p.custom[k] = '';
+          p.labels[k] = k;
+          return store.updateAsset(a.id, { notes: buildCustomFieldsNotes(p.custom, p.legacyText, p.labels) } as any);
+        })
+    );
+  };
+
+  const removeColumn = async (key: string) => {
+    if (!window.confirm(t('confirmDeleteColumn', { name: columnLabels[key] || key }))) return;
+    const nextKeys = columnKeys.filter((k) => k !== key);
+    const nextLabels = { ...columnLabels };
+    delete nextLabels[key];
+    setColumnKeys(nextKeys);
+    setColumnLabels(nextLabels);
+
+    await Promise.all(
+      assets
+        .filter((a) => (a.notes || '').includes('__customFields'))
+        .map((a) => {
+          const p = tryParseCustomFieldsNotes(a.notes);
+          delete p.custom[key];
+          delete p.labels[key];
+          return store.updateAsset(a.id, { notes: buildCustomFieldsNotes(p.custom, p.legacyText, p.labels) } as any);
+        })
+    );
+  };
+
+  const renameColumn = async (key: string, newLabel: string) => {
+    const label = newLabel.trim();
+    if (!label) return;
+    setColumnLabels((prev) => ({ ...prev, [key]: label }));
+
+    await Promise.all(
+      assets
+        .filter((a) => (a.notes || '').includes('__customFields'))
+        .map((a) => {
+          const p = tryParseCustomFieldsNotes(a.notes);
+          p.labels[key] = label;
+          return store.updateAsset(a.id, { notes: buildCustomFieldsNotes(p.custom, p.legacyText, p.labels) } as any);
+        })
+    );
   };
 
   return (
@@ -303,34 +340,112 @@ export function AssetList() {
 
       {/* Sheet tabs */}
       {sheets.length > 0 && (
-        <div className="flex flex-wrap gap-1 border-b border-rule pb-2">
+        <div className="flex items-stretch border-b border-rule bg-paper-dark/20 -mb-px">
           <button
             onClick={() => setSheetFilter('')}
-            className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider border transition-colors ${
-              sheetFilter === '' ? 'bg-ink text-paper-light border-ink' : 'bg-paper-light text-ink-soft border-rule hover:border-ink hover:text-ink'
-            }`}>
-            All Sheets
+            className={`
+              flex items-center gap-2 px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-colors
+              ${!sheetFilter
+                ? 'bg-paper-light text-ink border-t-2 border-l border-r border-rule border-t-ledger-green -mb-px z-10'
+                : 'text-ink-muted hover:text-ink border-b border-rule hover:bg-paper-dark/40'
+              }
+            `}
+          >
+            {t('allSheets')}
           </button>
-          {sheets.map((s) => (
-            <button
-              key={s}
-              onClick={() => setSheetFilter(s)}
-              className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider border transition-colors ${
-                sheetFilter === s ? 'bg-ink text-paper-light border-ink' : 'bg-paper-light text-ink-soft border-rule hover:border-ink hover:text-ink'
-              }`}>
-              {s}
-            </button>
-          ))}
+          {sheets.map((s) => {
+            const count = assets.filter((a) => a.sheetName === s).length;
+            const active = sheetFilter === s;
+            return (
+              <button
+                key={s}
+                onClick={() => setSheetFilter(s)}
+                className={`
+                  flex items-center gap-2 px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-colors
+                  ${active
+                    ? 'bg-paper-light text-ink border-t-2 border-l border-r border-rule border-t-ledger-green -mb-px z-10'
+                    : 'text-ink-muted hover:text-ink border-b border-rule hover:bg-paper-dark/40'
+                  }
+                `}
+              >
+                <span className="inline-flex items-center justify-center w-5 h-5 text-[10px] font-mono rounded bg-paper-dark border border-rule text-ink-soft">
+                  {count}
+                </span>
+                {s}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* Filters */}
-      <div className="bg-paper-light border border-rule p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-        <Input placeholder="Search tag or name..." value={search} onChange={(e) => setSearch(e.target.value)} icon={<Search className="w-4 h-4" />} />
-        <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} placeholder="All Categories" options={categories.map((c) => ({ label: c, value: c }))} />
-        <Select value={conditionFilter} onChange={(e) => setConditionFilter(e.target.value)} placeholder="All Conditions"
-          options={['New','Good','Fair','Poor','Damaged'].map((c) => ({ label: c, value: c }))} />
-        <Select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)} placeholder="All Locations" options={locations.map((l) => ({ label: l, value: l }))} />
+      {/* Search */}
+      <div className="bg-paper-light border border-rule p-4">
+        <Input
+          placeholder="Search across all columns..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          icon={<Search className="w-4 h-4" />}
+        />
+      </div>
+
+      {/* Columns toolbar */}
+      <div className="bg-paper-light border border-rule p-3 flex items-center gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">Columns</span>
+        {columnKeys.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {columnKeys.map((k) => (
+              <span
+                key={k}
+                className="group flex items-center gap-1 text-xs bg-paper-dark border border-rule px-2 py-0.5 text-ink-soft"
+              >
+                {columnLabels[k] || k}
+                <button
+                  onClick={() => removeColumn(k)}
+                  className="text-ink-muted hover:text-ledger-red opacity-0 group-hover:opacity-100 transition-opacity"
+                  title={`Remove column "${columnLabels[k] || k}"`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {addingColumn ? (
+          <div className="flex items-center gap-1 ml-auto">
+            <input
+              autoFocus
+              className="w-36 bg-paper-light border border-ink px-2 py-1 text-xs font-semibold uppercase tracking-wider"
+              placeholder="Column name"
+              value={newColumnKey}
+              onChange={(e) => setNewColumnKey(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter') {
+                  await addColumn(newColumnKey);
+                  setNewColumnKey('');
+                  setAddingColumn(false);
+                }
+                if (e.key === 'Escape') {
+                  setNewColumnKey('');
+                  setAddingColumn(false);
+                }
+              }}
+              onBlur={async () => {
+                if (newColumnKey.trim()) {
+                  await addColumn(newColumnKey);
+                }
+                setNewColumnKey('');
+                setAddingColumn(false);
+              }}
+            />
+          </div>
+        ) : (
+          <button
+            onClick={() => setAddingColumn(true)}
+            className="ml-auto text-xs font-semibold uppercase tracking-wider text-ink-muted hover:text-ledger-green border border-dashed border-rule px-3 py-1 hover:border-ledger-green transition-colors"
+          >
+            + Add Column
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -341,74 +456,83 @@ export function AssetList() {
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-paper-dark/60 border-b-2 border-ink">
-                {COLUMNS.map((col) => (
+                {columnKeys.map((k) => (
                   <th
-                    key={col.key}
-                    onClick={() => col.sortable && col.key !== 'actions' ? handleSort(col.key as keyof Asset) : undefined}
-                    className={`px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-ink whitespace-nowrap select-none ${col.sortable && col.key !== 'actions' ? 'cursor-pointer hover:bg-paper-dark' : ''}`}
+                    key={k}
+                    className="px-2 py-3 text-[11px] font-bold uppercase tracking-wider text-ink whitespace-nowrap select-none"
                   >
-                    {col.label}
-                    {col.sortable && col.key !== 'actions' && (
-                      <span className="ml-1">
-                        {sortField === col.key
-                          ? <span className="text-ledger-green">{sortDirection === 'asc' ? '▲' : '▼'}</span>
-                          : <span className="text-rule">·</span>}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1">
+                      <input
+                        className="bg-transparent outline-none w-full text-[11px] font-bold uppercase tracking-wider"
+                        value={columnLabels[k] || k}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setColumnLabels((prev) => ({ ...prev, [k]: next }));
+                        }}
+                        onBlur={() => renameColumn(k, columnLabels[k] || k)}
+                      />
+                      <button
+                        onClick={() => removeColumn(k)}
+                        className="text-ink-muted hover:text-ledger-red opacity-0 hover:opacity-100 ml-1"
+                        title={`Remove column "${columnLabels[k] || k}"`}
+                      >
+                        ×
+                      </button>
+                    </div>
                   </th>
                 ))}
+                <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-ink whitespace-nowrap select-none">
+                  {t('colActions')}
+                </th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length > 0 ? filtered.map((asset, idx) => (
-                <tr key={asset.id} className={`border-b border-rule-soft hover:bg-paper-dark/40 transition-colors group ${idx % 2 === 1 ? 'bg-paper-dark/15' : ''}`}>
-                  <td className="px-4 py-3 font-mono text-sm text-ledger-green font-semibold whitespace-nowrap">
-                    <Link to={`/assets/${asset.id}`} className="hover:underline">{asset.tagNumber}</Link>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-ink max-w-[220px] truncate">{asset.name}</td>
-                  <td className="px-4 py-3 text-sm text-ink-soft whitespace-nowrap">{asset.category}</td>
-                  <td className="px-4 py-3 text-sm text-ink-soft whitespace-nowrap">{asset.location}</td>
-                  <td className="px-4 py-3 text-sm text-ink-soft whitespace-nowrap">{asset.assignedTo || '—'}</td>
-                  <td className="px-4 py-3 text-sm text-ink-soft whitespace-nowrap">{asset.supplier || '—'}</td>
-                  <td className="px-4 py-3 text-sm font-mono text-ink whitespace-nowrap text-right">
-                    RWF {asset.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-ink-soft whitespace-nowrap">{asset.acquisitionDate}</td>
-                  <td className="px-4 py-3 text-sm text-ink-soft whitespace-nowrap">{asset.fundingSource || '—'}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <Badge variant={conditionVariant(asset.condition)}>{asset.condition}</Badge>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-ink-soft whitespace-nowrap">{asset.serialNumber || '—'}</td>
-                  <td className="px-4 py-3 text-sm text-ink-soft max-w-[160px] truncate">{asset.notes || '—'}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="inline-flex items-center gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
-                      <Link to={`/assets/${asset.id}`} className="p-1.5 text-ink-muted hover:text-ledger-green" title="View"><Eye className="w-4 h-4" /></Link>
-                      <Link to={`/assets/${asset.id}/edit`} className="p-1.5 text-ink-muted hover:text-ink" title="Edit"><Edit2 className="w-4 h-4" /></Link>
-                      <button onClick={() => handleDelete(asset.id, asset.name)} className="p-1.5 text-ink-muted hover:text-ledger-red" title="Delete"><Trash2 className="w-4 h-4" /></button>
-                    </div>
-                  </td>
-                </tr>
-              )) : (
+              {filtered.length > 0 ? (
+                filtered.map((asset, idx) => (
+                  <tr
+                    key={asset.id}
+                    className={`border-b border-rule-soft hover:bg-paper-dark/40 transition-colors group ${idx % 2 === 1 ? 'bg-paper-dark/15' : ''}`}
+                  >
+                    {columnKeys.map((k) => (
+                      <td key={k} className="px-2 py-1">
+                        <DynamicCell
+                          value={getCustomColumnValue(asset, k)}
+                          onSave={async (val) => {
+                            await updateAssetNotes(asset, k, val);
+                          }}
+                        />
+                      </td>
+                    ))}
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
+                        <Link to={`/assets/${asset.id}`} className="p-1.5 text-ink-muted hover:text-ledger-green" title="View">
+                          <Eye className="w-4 h-4" />
+                        </Link>
+                        <Link to={`/assets/${asset.id}/edit`} className="p-1.5 text-ink-muted hover:text-ink" title="Edit">
+                          <Edit2 className="w-4 h-4" />
+                        </Link>
+                        <button
+                          onClick={() => handleDelete(asset.id, asset.tagNumber || asset.name || '')}
+                          className="p-1.5 text-ink-muted hover:text-ledger-red"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
                 <tr>
-                  <td colSpan={COLUMNS.length} className="px-4 py-12 text-center text-ink-muted text-sm italic font-serif">
+                  <td
+                    colSpan={columnKeys.length + 1}
+                    className="px-4 py-12 text-center text-ink-muted text-sm italic font-serif"
+                  >
                     No entries match the current filters.
                   </td>
                 </tr>
               )}
             </tbody>
-            {filtered.length > 0 && (
-              <tfoot>
-                <tr className="border-t-2 border-ink bg-paper-dark/60">
-                  <td colSpan={6} className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-ink">
-                    Total ({filtered.length} entries)
-                  </td>
-                  <td className="px-4 py-3 text-sm font-mono font-bold text-ink text-right whitespace-nowrap">
-                    RWF {filtered.reduce((s, a) => s + (a.value || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td colSpan={6}></td>
-                </tr>
-              </tfoot>
-            )}
           </table>
         )}
       </div>

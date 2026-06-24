@@ -1,8 +1,9 @@
 import { useState } from 'react';
 
 import { Outlet, NavLink, Link } from 'react-router-dom';
-import { Menu, X, BookOpen, LogOut, User } from 'lucide-react';
+import { Menu, X, BookOpen, LogOut, User, Globe } from 'lucide-react';
 import { AuthUser } from '../App';
+import { useI18n } from '../lib/i18n';
 
 interface Props {
   user: AuthUser;
@@ -10,19 +11,20 @@ interface Props {
 }
 
 export function Layout({ user, onLogout }: Props) {
+  const { t, language, setLanguage } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
   const navItems = [
   {
     to: '/assets',
-    label: 'Register'
+    label: t('nav.register')
   },
   {
     to: '/assets/new',
-    label: 'New Entry'
+    label: t('nav.newEntry')
   },
   {
     to: '/import',
-    label: 'Import'
+    label: t('nav.import')
   }];
 
   return (
@@ -54,12 +56,20 @@ export function Layout({ user, onLogout }: Props) {
                 <User className="w-4 h-4 text-ink-soft" />
               </div>
               <button
+                onClick={() => setLanguage(language === 'en' ? 'rw' : 'en')}
+                className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ledger-green uppercase tracking-wider font-semibold border border-rule px-3 py-1.5 hover:border-ledger-green transition-colors"
+                title={language === 'en' ? 'Kinyarwanda' : 'English'}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                {language === 'en' ? 'RW' : 'EN'}
+              </button>
+              <button
                 onClick={onLogout}
                 className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ledger-red uppercase tracking-wider font-semibold border border-rule px-3 py-1.5 hover:border-ledger-red transition-colors"
-                title="Sign out"
+                title={t('nav.signOut')}
               >
                 <LogOut className="w-3.5 h-3.5" />
-                Sign Out
+                {t('nav.signOut')}
               </button>
             </div>
             <button

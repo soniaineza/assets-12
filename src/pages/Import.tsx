@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileSpreadsheet, CheckCircle } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { useI18n } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
 import { Button } from '../components/ui/Button';
 
@@ -129,45 +130,44 @@ function stripEmptyColumns(headers: string[], rows: any[][]): { headers: string[
 
 function buildRecord(row: any[], headers: string[], sheetName: string, now: string): any | null {
   const rec: any = { created_at: now, updated_at: now, deleted_at: null, sheet_name: sheetName };
-  const extra: string[] = [];
+  const fields: Record<string, string> = {};
+  const labels: Record<string, string> = {};
 
   headers.forEach((header, i) => {
     const raw = row[i];
     const strVal = raw !== undefined && raw !== null && String(raw).trim() !== '' && String(raw).trim().toLowerCase() !== 'n/a'
-      ? String(raw).trim() : null;
-    const dbCol = mapHeader(header);
+      ? String(raw).trim() : '';
+    const key = header.trim();
+    if (!key) return;
 
+    fields[key] = strVal;
+    labels[key] = key;
+
+    // Also populate DB columns for backward compatibility when a known header matches
+    const dbCol = mapHeader(header);
     if (dbCol) {
       if (dbCol === 'value') rec[dbCol] = sanitizeValue(raw);
       else if (dbCol === 'acquisition_date') rec[dbCol] = sanitizeDate(raw);
-      else if (!rec[dbCol]) rec[dbCol] = strVal; // first mapped value wins
-    } else if (strVal) {
-      extra.push(`${header}: ${strVal}`);
+      else if (!rec[dbCol]) rec[dbCol] = strVal || null;
     }
   });
 
-  // Skip truly empty rows
-  if (!rec.tag_number && !rec.name && extra.length === 0) return null;
+  // Skip fully empty rows
+  if (Object.values(fields).every(v => !v)) return null;
 
-  // Store unmapped columns in notes
-  if (extra.length > 0) {
-    rec.notes = rec.notes ? `${rec.notes} | ${extra.join(' | ')}` : extra.join(' | ');
-  }
-
-  // Guaranteed fallbacks
-  if (!rec.tag_number) rec.tag_number = `${sheetName}-${Date.now()}-${Math.random().toString(36).slice(2,5)}`;
-  if (!rec.name) rec.name = rec.tag_number;
-  if (!rec.category) rec.category = sheetName;
-  if (!rec.location) rec.location = '';
-  if (!rec.acquisition_date) rec.acquisition_date = new Date().toISOString().split('T')[0];
-  if (rec.value === undefined || rec.value === null) rec.value = 0;
-  if (!rec.condition) rec.condition = 'Good';
+  // Store ALL field values in notes JSON
+  rec.notes = JSON.stringify({
+    __customFields: true,
+    fields,
+    labels,
+  });
 
   return rec;
 }
 
 export function Import() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [file, setFile] = useState<File | null>(null);
@@ -197,10 +197,10 @@ export function Import() {
           return { name: sheetName, headers, rows };
         }).filter(s => s.rows.length > 0);
 
-        if (parsed.length === 0) { alert('No data found.'); return; }
+        if (parsed.length === 0) { alert(t('noData')); return; }
         setSheets(parsed);
         setStep(2);
-      } catch { alert('Could not read file. Please use .xlsx, .xls or .csv'); }
+      } catch { alert(t('fileError')); }
     };
     reader.readAsArrayBuffer(sel);
   };
@@ -225,23 +225,21 @@ export function Import() {
       }
       if (records.length === 0) continue;
 
-      // UPSERT by tag_number in chunks of 100
+      // Insert in chunks of 100
       for (let i = 0; i < records.length; i += 100) {
         const chunk = records.slice(i, i + 100);
 
-        // Use Postgres upsert via unique constraint on tag_number.
-        // Supabase client supports upsert() for PostgREST.
         const { data, error } = await supabase
           .from('assets')
-          .upsert(chunk, { onConflict: 'tag_number' })
-          .select('id, tag_number');
+          .insert(chunk)
+          .select('id');
 
         if (error) {
-          console.error(`Sheet "${sheet.name}" upsert error:`, error.message);
+          console.error(`Sheet "${sheet.name}" insert error:`, error.message);
           totalFailed += chunk.length;
         } else {
           totalSuccess += data?.length ?? 0;
-          insertedIds.push(...(data || []));
+          insertedIds.push(...(data?.map(d => ({ id: d.id, tag_number: d.tag_number || '' })) || []));
         }
       }
     }
@@ -264,13 +262,13 @@ export function Import() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="pb-4 border-b border-rule">
-        <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted mb-1">Bulk Import</p>
-        <h2 className="font-serif text-3xl text-ink">Import from Excel</h2>
-        <p className="text-sm text-ink-soft mt-1">All sheets imported exactly as in your file. No data is changed.</p>
+        <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted mb-1">{t('importSubtitle')}</p>
+        <h2 className="font-serif text-3xl text-ink">{t('importTitle')}</h2>
+        <p className="text-sm text-ink-soft mt-1">{t('importDesc')}</p>
       </div>
 
       <ol className="flex items-center justify-between border border-rule bg-paper-light px-6 py-4">
-        {['Upload File', 'Preview & Confirm', 'Done'].map((label, i) => {
+        {[t('uploadFile'), t('preview'), t('done')].map((label, i) => {
           const s = i + 1, active = step === s, done = step > s;
           return (
             <li key={label} className="flex items-center gap-3 flex-1">
@@ -289,11 +287,11 @@ export function Import() {
           <div className="mx-auto w-14 h-14 border-2 border-ink bg-paper-dark flex items-center justify-center mb-4">
             <FileSpreadsheet className="w-6 h-6 text-ink" />
           </div>
-          <h3 className="font-serif text-2xl text-ink mb-2">Select Excel or CSV File</h3>
-          <p className="text-sm text-ink-soft mb-6 max-w-md mx-auto">All sheets imported as-is. Supported: .xlsx, .xls, .csv</p>
+          <h3 className="font-serif text-2xl text-ink mb-2">{t('selectFile')}</h3>
+          <p className="text-sm text-ink-soft mb-6 max-w-md mx-auto">{t('importDesc2')}</p>
           <input type="file" accept=".xlsx,.xls,.csv" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
           <Button onClick={() => fileInputRef.current?.click()} size="lg">
-            <Upload className="w-4 h-4 mr-2" />Choose File
+            <Upload className="w-4 h-4 mr-2" />{t('chooseFile')}
           </Button>
         </div>
       )}
@@ -301,14 +299,14 @@ export function Import() {
       {step === 2 && (
         <div className="bg-paper-light border border-rule">
           <div className="px-6 py-4 border-b border-rule bg-paper-dark/40 flex items-center justify-between">
-            <h3 className="font-serif text-xl text-ink">Preview</h3>
-            <span className="text-xs text-ink-muted font-mono">{file?.name} · {sheets.length} sheets · {totalRows} rows</span>
+            <h3 className="font-serif text-xl text-ink">{t('previewTitle')}</h3>
+            <span className="text-xs text-ink-muted font-mono">{t('fileInfo', { file: file?.name, sheets: sheets.length, rows: totalRows })}</span>
           </div>
           <div className="p-6 space-y-8">
             {sheets.map((sheet) => (
               <div key={sheet.name}>
                 <p className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-2">
-                  Sheet: <span className="text-ink">{sheet.name}</span> — {sheet.rows.length} rows · {sheet.headers.length} columns
+                  {t('sheetName', { name: sheet.name, rows: sheet.rows.length, cols: sheet.headers.length })}
                 </p>
                 <div className="overflow-x-auto border border-rule">
                   <table className="min-w-full text-sm text-left">
@@ -328,7 +326,7 @@ export function Import() {
                         </tr>
                       ))}
                       {sheet.rows.length > 5 && (
-                        <tr><td colSpan={sheet.headers.length} className="px-3 py-2 text-xs text-ink-muted italic">…and {sheet.rows.length - 5} more rows</td></tr>
+                        <tr><td colSpan={sheet.headers.length} className="px-3 py-2 text-xs text-ink-muted italic">{t('moreRows', { n: sheet.rows.length - 5 })}</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -337,8 +335,8 @@ export function Import() {
             ))}
           </div>
           <div className="px-6 py-4 border-t border-rule bg-paper-dark/40 flex justify-between gap-3">
-            <Button variant="secondary" onClick={() => setStep(1)}>Choose another file</Button>
-            <Button onClick={performImport} disabled={isImporting} isLoading={isImporting}>Confirm and Import</Button>
+            <Button variant="secondary" onClick={() => setStep(1)}>{t('chooseAnother')}</Button>
+            <Button onClick={performImport} disabled={isImporting} isLoading={isImporting}>{t('confirmImport')}</Button>
           </div>
         </div>
       )}
@@ -346,19 +344,19 @@ export function Import() {
       {step === 3 && (
         <div className="bg-paper-light border border-rule">
           <div className="px-6 py-4 border-b border-rule bg-paper-dark/40">
-            <h3 className="font-serif text-xl text-ink">Import Complete</h3>
+            <h3 className="font-serif text-xl text-ink">{t('importComplete')}</h3>
           </div>
           <div className="p-6 space-y-4">
             <div className="flex items-center gap-3">
               <CheckCircle className="w-5 h-5 text-ledger-green" />
               <span className="text-sm text-ink">
-                {importResult?.success ?? 0} assets imported
-                {importResult?.failed ? ` · ${importResult.failed} failed` : ''}
+                {t('imported', { n: importResult?.success ?? 0 })}
+                {importResult?.failed ? ` · ${t('failed', { n: importResult?.failed })}` : ''}
               </span>
             </div>
             <div className="flex gap-3 pt-2 flex-wrap">
-              <Button onClick={() => navigate('/assets')}>View Assets</Button>
-              <Button variant="secondary" onClick={() => { setStep(1); setSheets([]); setFile(null); }}>Import Another File</Button>
+              <Button onClick={() => navigate('/assets')}>{t('viewAssets')}</Button>
+              <Button variant="secondary" onClick={() => { setStep(1); setSheets([]); setFile(null); }}>{t('importAnother')}</Button>
             </div>
           </div>
         </div>

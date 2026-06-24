@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { LanguageProvider } from './lib/LanguageProvider';
 import { Layout } from './components/Layout';
 import { AssetList } from './pages/AssetList';
 import { AssetForm } from './pages/AssetForm';
@@ -29,22 +30,24 @@ export function App() {
     setUser(null);
   };
 
-  if (!user) {
-    return <Login onLogin={handleLogin} />;
-  }
-
   return (
-    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <Routes>
-        <Route path="/" element={<Layout user={user} onLogout={handleLogout} />}>
-          <Route index element={<Navigate to="/assets" replace />} />
-          <Route path="assets" element={<AssetList />} />
-          <Route path="assets/new" element={<AssetForm />} />
-          <Route path="assets/:id" element={<AssetDetail />} />
-          <Route path="assets/:id/edit" element={<AssetEdit />} />
-          <Route path="import" element={<Import />} />
-        </Route>
-      </Routes>
-    </Router>
+    <LanguageProvider>
+      {!user ? (
+        <Login onLogin={handleLogin} />
+      ) : (
+        <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Routes>
+            <Route path="/" element={<Layout user={user} onLogout={handleLogout} />}>
+              <Route index element={<Navigate to="/assets" replace />} />
+              <Route path="assets" element={<AssetList />} />
+              <Route path="assets/new" element={<AssetForm />} />
+              <Route path="assets/:id" element={<AssetDetail />} />
+              <Route path="assets/:id/edit" element={<AssetEdit />} />
+              <Route path="import" element={<Import />} />
+            </Route>
+          </Routes>
+        </Router>
+      )}
+    </LanguageProvider>
   );
 }

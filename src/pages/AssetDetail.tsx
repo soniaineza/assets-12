@@ -1,18 +1,16 @@
 import { useEffect, useState } from 'react';
-
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Edit2, Trash2 } from 'lucide-react';
-
 import { store } from '../lib/assetStore';
 import { Asset, ChangeLogEntry } from '../lib/types';
-
+import { tryParseCustomFieldsNotes } from '../lib/customFields';
 import { Button } from '../components/ui/Button';
-import { Badge } from '../components/ui/Badge';
+import { useI18n } from '../lib/i18n';
 
 export function AssetDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-
+  const { t } = useI18n();
   const [asset, setAsset] = useState<Asset | null>(null);
   const [logs, setLogs] = useState<ChangeLogEntry[]>([]);
 
@@ -20,10 +18,8 @@ export function AssetDetail() {
     const loadAsset = async () => {
       if (id) {
         const found = await store.getAsset(id);
-
         if (found) {
           setAsset(found);
-
           const changeLogs = await store.getChangeLog(id);
           setLogs(changeLogs);
         } else {
@@ -31,126 +27,25 @@ export function AssetDetail() {
         }
       }
     };
-
     loadAsset();
   }, [id, navigate]);
 
   if (!asset) return null;
 
   const handleDelete = async () => {
-    if (window.confirm(`Delete "${asset.name}"?`)) {
+    if (window.confirm(t('confirmDeleteAsset', { name: asset.name }))) {
       try {
         await store.softDeleteAsset(asset.id);
         navigate('/assets');
-      } catch (error) {
-        console.error('Error deleting asset:', error);
-        alert('Failed to delete asset');
-      }
-    }
-  };
-
-  const conditionVariant = (c: string): any => {
-    if (c === 'New' || c === 'Good') return 'success';
-    if (c === 'Fair') return 'info';
-    if (c === 'Poor') return 'warning';
-    if (c === 'Damaged') return 'danger';
-
-    return 'neutral';
-  };
-
-  const fmtDate = (v: string | undefined) => {
-    if (!v) return '—';
-
-    const d = new Date(v);
-
-    return isNaN(d.getTime())
-      ? v
-      : d.toLocaleDateString('en-GB', {
-          day: '2-digit',
-          month: 'long',
-          year: 'numeric',
-        });
-  };
-
-  const { legacyText: legacyNotesText, custom: customFields } = (() => {
-    const raw = asset.notes || '';
-    if (!raw) return { legacyText: '', custom: {} as Record<string, string> };
-
-    const trimmed = raw.trim();
-    if (trimmed.startsWith('{') && trimmed.includes('__customFields')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed?.__customFields === true && parsed?.fields && typeof parsed.fields === 'object') {
-          const out: Record<string, string> = {};
-          for (const [k, v] of Object.entries(parsed.fields as Record<string, any>)) {
-            out[k] = v == null ? '' : String(v);
-          }
-          return { legacyText: parsed?.legacyText || '', custom: out };
-        }
       } catch {
-        // ignore
+        alert(t('failedDelete'));
       }
     }
+  };
 
-    return { legacyText: raw, custom: {} as Record<string, string> };
-  })();
-
-  const fields = [
-    {
-      label: 'Tag Number',
-      value: asset.tagNumber,
-      mono: true,
-    },
-
-    {
-      label: 'Description',
-      value: asset.name,
-    },
-    {
-      label: 'Category',
-      value: asset.category,
-    },
-    {
-      label: 'Serial Number',
-      value: asset.serialNumber || '—',
-    },
-    {
-      label: 'Acquisition Date',
-      value: fmtDate(asset.acquisitionDate),
-    },
-    {
-      label: 'Value',
-      value: `RWF ${(asset.value || 0).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-      })}`,
-      mono: true,
-    },
-    {
-      label: 'Location',
-      value: asset.location || '—',
-    },
-    {
-      label: 'Assigned To',
-      value: asset.assignedTo || '—',
-    },
-    {
-      label: 'Supplier',
-      value: asset.supplier || '—',
-    },
-    {
-      label: 'Funding Source',
-      value: asset.fundingSource || '—',
-    },
-
-    ...(asset.insuranceExpiry
-      ? [
-          {
-            label: 'Insurance Expiry',
-            value: fmtDate(asset.insuranceExpiry),
-          },
-        ]
-      : []),
-  ];
+  // Read all dynamic fields from notes JSON
+  const parsed = tryParseCustomFieldsNotes(asset.notes);
+  const dynamicFields = Object.entries(parsed.custom).sort(([a], [b]) => a.localeCompare(b));
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -161,9 +56,8 @@ export function AssetDetail() {
         >
           <ArrowLeft className="w-4 h-4" />
         </button>
-
         <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">
-          Asset Record
+          {t('assetRecord')}
         </p>
       </div>
 
@@ -172,115 +66,61 @@ export function AssetDetail() {
         <div className="p-6 border-b border-rule flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
             <p className="font-mono text-sm text-ledger-green font-semibold mb-1">
-              {asset.tagNumber}
+              {asset.tagNumber || asset.id?.slice(0, 8) || '—'}
             </p>
-
             <h2 className="font-serif text-3xl text-ink">
-              {asset.name}
+              {asset.name || 'Asset Record'}
             </h2>
-
-            <div className="mt-3 flex items-center gap-2">
-              <Badge variant={conditionVariant(asset.condition)}>
-                {asset.condition}
-              </Badge>
-
-              <span className="text-xs text-ink-muted uppercase tracking-wider">
-                {asset.category}
-              </span>
-            </div>
           </div>
-
           <div className="flex gap-2">
             <Link to={`/assets/${asset.id}/edit`}>
               <Button variant="secondary">
                 <Edit2 className="w-3.5 h-3.5 mr-2" />
-                Edit
+                {t('edit')}
               </Button>
             </Link>
-
             <Button variant="danger" onClick={handleDelete}>
               <Trash2 className="w-3.5 h-3.5 mr-2" />
-              Delete
+              {t('delete')}
             </Button>
           </div>
         </div>
 
-        {/* Detail grid */}
-        <dl className="grid grid-cols-1 sm:grid-cols-2">
-          {fields.map((f, i) => (
-            <div
-              key={f.label}
-              className={`
-                px-6 py-4 border-rule
-                ${i < fields.length - 1 ? 'border-b' : ''}
-                ${i % 2 === 0 ? 'sm:border-r' : ''}
-                ${
-                  i === fields.length - 1 && fields.length % 2 !== 0
-                    ? 'sm:col-span-2'
-                    : ''
-                }
-              `}
-            >
-              <dt className="text-[11px] uppercase tracking-wider text-ink-muted font-semibold mb-1">
-                {f.label}
-              </dt>
-
-              <dd
-                className={`text-sm text-ink ${
-                  f.mono ? 'font-mono' : ''
-                }`}
+        {/* Dynamic detail grid */}
+        {dynamicFields.length > 0 && (
+          <dl className="grid grid-cols-1 sm:grid-cols-2">
+            {dynamicFields.map(([key, value], i) => (
+              <div
+                key={key}
+                className={`
+                  px-6 py-4 border-rule
+                  ${i < dynamicFields.length - 1 ? 'border-b' : ''}
+                  ${i % 2 === 0 ? 'sm:border-r' : ''}
+                `}
               >
-                {f.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-
-        {asset.notes && (
-          <div className="px-6 py-4 border-t border-rule bg-paper-dark/30">
-            <dt className="text-[11px] uppercase tracking-wider text-ink-muted font-semibold mb-2">
-              Remarks
-            </dt>
-
-            <dd className="text-sm text-ink whitespace-pre-wrap font-serif italic">
-              {asset.notes.startsWith('{') && asset.notes.includes('__customFields')
-                ? legacyNotesText || '—'
-                : `"${asset.notes}"`}
-            </dd>
-          </div>
+                <dt className="text-[11px] uppercase tracking-wider text-ink-muted font-semibold mb-1">
+                  {parsed.labels[key] || key}
+                </dt>
+                <dd className="text-sm text-ink">
+                  {value || '—'}
+                </dd>
+              </div>
+            ))}
+          </dl>
         )}
 
-        {Object.keys(customFields).length > 0 && (
-          <div className="px-6 py-4 border-t border-rule bg-paper-dark/30">
-            <dt className="text-[11px] uppercase tracking-wider text-ink-muted font-semibold mb-2">
-              Custom Fields
-            </dt>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-              {Object.entries(customFields)
-                .sort(([aKey], [bKey]) => aKey.localeCompare(bKey))
-                .map(([k, v]) => (
-                  <div key={k}>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-1">
-                      {k}
-                    </p>
-                    <p className="text-sm text-ink">{v || '—'}</p>
-                  </div>
-                ))}
-            </div>
+        {dynamicFields.length === 0 && (
+          <div className="px-6 py-8 text-center text-ink-muted text-sm italic font-serif">
+            No fields data available for this asset.
           </div>
         )}
-
-
       </div>
 
       {/* History */}
       <div className="bg-paper-light border border-rule">
         <div className="px-6 py-3 border-b border-rule bg-paper-dark/40">
-          <h3 className="font-serif text-lg text-ink">
-            Record History
-          </h3>
+          <h3 className="font-serif text-lg text-ink">{t('recordHistory')}</h3>
         </div>
-
         <div className="p-6">
           {logs.length > 0 ? (
             <ol className="space-y-3">
@@ -295,41 +135,19 @@ export function AssetDetail() {
                       minute: '2-digit',
                     })}
                   </span>
-
                   <span className="text-ink">
-                    {log.field === 'CREATED' ||
-                    log.field === 'IMPORTED' ||
-                    log.field === 'DELETED' ? (
+                    {log.field === 'CREATED' || log.field === 'IMPORTED' || log.field === 'DELETED' ? (
                       <span className="font-semibold uppercase text-[11px] tracking-wider text-ledger-green">
                         {log.newValue}
                       </span>
                     ) : (
                       <>
-                        <span className="text-ink-soft">
-                          Updated{' '}
-                        </span>
-
-                        <span className="font-semibold">
-                          {log.field}
-                        </span>
-
-                        <span className="text-ink-muted">
-                          {' '}
-                          from{' '}
-                        </span>
-
-                        <span className="line-through text-ink-muted">
-                          {String(log.oldValue || '—')}
-                        </span>
-
-                        <span className="text-ink-muted">
-                          {' '}
-                          to{' '}
-                        </span>
-
-                        <span className="font-medium">
-                          {String(log.newValue || '—')}
-                        </span>
+                        <span className="text-ink-soft">Updated </span>
+                        <span className="font-semibold">{log.field}</span>
+                        <span className="text-ink-muted"> from </span>
+                        <span className="line-through text-ink-muted">{String(log.oldValue || '—')}</span>
+                        <span className="text-ink-muted"> to </span>
+                        <span className="font-medium">{String(log.newValue || '—')}</span>
                       </>
                     )}
                   </span>
@@ -337,13 +155,10 @@ export function AssetDetail() {
               ))}
             </ol>
           ) : (
-            <p className="text-sm text-ink-muted italic font-serif">
-              No changes recorded.
-            </p>
+            <p className="text-sm text-ink-muted italic font-serif">{t('noChanges')}</p>
           )}
         </div>
       </div>
     </div>
   );
 }
-
